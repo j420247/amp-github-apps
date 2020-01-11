@@ -33,12 +33,17 @@ requests from this comma separated list of IP addresses will be processed.
     request does not change the bundle at all (e.g., documentation changes)
 * `/v0/commit/:headSha/report`
   * Accepts a JSON object with a numeric `bundleSize` field, denoting the size
-    of the compiled bundle based on the head commit in KB
+    of the compiled bundle based on the head commit in KB, and a `baseSha` field
+    denoting the commit SHA on to compare against.
   * Calculated the change in the size of the compiled bundle between the base
     and the head commits, and determines whether to mark the check as passed
     (i.e., when the bundle size is not increased or is increased by a fraction),
     or whether to mark the check as requiring action (i.e., the size increases
     significantly or could not be calculated for any reason).
+* `/v0/commit/:headSha/store`
+  * Accepts a JSON object with a numeric `brotliBundleSize` field, denoting the
+    size of the compiled bundle in the respective compressions.
+  * Stores these values in the `ampproject/amphtml-build-artifacts` repository.
 
 
 
@@ -60,21 +65,32 @@ Follow these setup instructions to start developing for this App locally:
      created above
    * Set the _Webhook secret_ to a random, secure value
    * Give the App _Read & Write_ permissions on **Checks** and **Pull requests**
+   * Give the App _Read-only_ permissions on **Organization members**
    * Subscribe to the **Pull request** and **Pull request review** events
    * None of the other fields are required
 6. After creating the application, generate and download a private key. Also
    take note of the App ID
-7. Install the application on a GitHub repository that you want to use for
+7. Create a personal access token belonging to a GitHub _user_ with the
+   `public_repo` and `read:org` permissions and nore its access token.
+8. Install the application on a GitHub repository that you want to use for
    testing. You might want to create a new repository for this purpose.
-8. Copy the `.env.example` file to `.env` and modify the fields based on the
+9. Copy the `.env.example` file to `.env` and modify the fields based on the
    instructions in that file and the values from the GitHub App page
    * The value for the `PRIVATE_KEY` field is a base64 representation of the
      `.pem` file you downloaded from the GitHub App page. On Linux/Mac you can
      convert that file by running `cat private-key-file.pem | base64` in a
      command line
-9. Copy the `db-config.example.js` file to `db-config.js` and modify the fields
-   based on the connection information to your database
-10. `npm run dev`
+   * The value for the `ACCESS_TOKEN` field is the personal access token from
+     the precending step
+   * The value for the `TRAVIS_PUSH_BUILD_TOKEN` should be a unique identifier.
+     This token can be any string, and must be passed as a `token` field to
+     verify that requests to `/commit/:headSha/store` are coming from push
+     builds and not from pull requests. On Travis, set this as an push-build
+     only environment variable and treat this like you would any other access
+     token.
+10. Copy the `db-config.example.js` file to `db-config.js` and modify the fields
+    based on the connection information to your database
+11. `npm run dev`
    * This will reload the App on every file change. Quit the server with
      `<Ctrl> + C` or `<Cmd> + C`
 

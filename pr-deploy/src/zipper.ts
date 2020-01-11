@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import FancyLog from 'fancy-log';
+
 import mime from 'mime-types';
 import unzip from 'unzip-stream';
 import {Storage} from '@google-cloud/storage';
@@ -23,36 +23,28 @@ import {Storage} from '@google-cloud/storage';
  * AMP Travis Build Storage bucket, unzips and writes to
  * a test website bucket that serves the files publicly.
  */
-export async function unzipAndMove(prId: number): Promise<string> {
+export async function unzipAndMove(id: number): Promise<string> {
   const storage = new Storage({projectId: process.env.PROJECT_ID});
   const serveBucket = storage.bucket(process.env.SERVE_BUCKET);
-  const buildFileName = `amp_dist_${prId}`;
+  const buildFileName = `amp_dist_${id}`;
   const buildFile =
     storage.bucket(process.env.BUILD_BUCKET).file(`${buildFileName}.zip`);
 
   return new Promise<string>((resolve, reject) => {
     buildFile.createReadStream()
+      .on('error', reject)
       .pipe(unzip.Parse())
       .on('entry', entry => {
         const serveFileName = entry.path;
-        const serveFile = serveBucket.file(serveFileName);
-        entry.pipe(serveFile.createWriteStream({
-          metadata: {
-            contentType: mime.lookup(serveFileName),
-          },
-        })
-          .on('error', error => {
-            FancyLog(error);
-            return reject;
-          })
-          .on('finish', () => {
-            FancyLog(`Uploaded ${serveFileName}`);
-          })
-        );
+        const serveFile = serveBucket.file(`${buildFileName}/${serveFileName}`);
+        const contentType =
+          mime.lookup(serveFileName) || 'application/octet-stream';
+        entry.pipe(
+          serveFile.createWriteStream({metadata: {contentType}})
+            .on('error', reject));
       })
       .on('close', async() => {
-        //TODO(estherkim): return uploaded URL (point to examples?)
-        return resolve(`https://storage.googleapis.com/${process.env.SERVE_BUCKET}/${buildFileName}/view.html`);
+        return resolve(`https://console.cloud.google.com/storage/browser/${process.env.SERVE_BUCKET}/${buildFileName}`);
       });
   });
 };

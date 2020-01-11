@@ -1,5 +1,5 @@
 /**
- * Copyright 2016 Google Inc.
+ * Copyright 2019 The AMP HTML Authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,128 +14,199 @@
  * limitations under the License.
  */
 
-const path = require('path');
+const OWNER_MODIFIER = {
+  NONE: '',
+  NOTIFY: 'always notify',
+  SILENT: 'never notify',
+  REQUIRE: 'require review',
+};
 
 /**
- * @fileoverview Contains classes and functions in relation to "OWNER" files
- * and theyre evaluation.
- */
-
-/**
- * Represents an OWNER file found in the repo.
+ * An owner of some set of files.
+ *
+ * TODO(#395): Implement ownership modifiers.
  */
 class Owner {
   /**
-   * @param {!Array} config
-   * @param {string} pathToRepoDir
-   * @param {string} filePath
-   * @constructor
+   * Constructor.
+   *
+   * @param {string} name readable name identifying the owner user/team.
+   * @param {?OWNER_MODIFIER} modifier optional owner modifier.
    */
-  constructor(config, pathToRepoDir, filePath) {
-    // We want it have the leading ./ to evaluate `.` later on
-    this.path = /^\./.test(filePath) ? filePath : `.${path.sep}${filePath}`;
-    this.dirname = path.dirname(this.path);
-    this.fullpath = path.join(pathToRepoDir, this.path);
-    this.score = (this.dirname.match(/\//g) || []).length;
-
-    this.dirOwners = [];
-    this.fileOwners = Object.create(null);
-    this.parseConfig_(config);
+  constructor(name, modifier = OWNER_MODIFIER.NONE) {
+    this.name = name;
+    this.modifier = modifier || OWNER_MODIFIER.NONE;
   }
 
   /**
-   * @param {!Array} config
+   * Tests if this owner matches a username.
+   *
+   * @throws {Error} if called on the abstract base `Owner` class.
+   * @param {string} username username to check.
    */
-  parseConfig_(config) {
-    config.forEach(entry => {
-      if (typeof entry === 'string') {
-        this.dirOwners.push(entry);
-      }
-    });
-    this.dirOwners.sort();
+  includes(username) {
+    throw new Error('Not implemented for abstract class `Owner`');
   }
 
   /**
-   * @param {!Git} git
-   * @param {!PullRequest} pr
-   * @return {object}
+   * Returns a list of all usernames included by the owner.
+   *
+   * @return {!Array<string>} list of GitHub usernames.
    */
-  static async getOwners(git, pr) {
-    // Update the local target repository of the latest from master
-    git.pullLatestForRepo(process.env.GITHUB_REPO_DIR, 'origin', 'master');
-    const promises = Promise.all([
-      pr.listFiles(),
-      git.getOwnersFilesForBranch(pr.author, process.env.GITHUB_REPO_DIR,
-        'master'),
-    ]);
-    const res = await promises;
-    const [files, ownersMap] = res;
-    const owners = findOwners(files, ownersMap);
-    pr.context.log.debug('[getOwners]', owners);
-    return owners;
+  get allUsernames() {
+    return [];
+  }
+
+  /**
+   * Render the owner list as a string
+   *
+   * @throws {Error} if called on the abstract base `Owner` class.
+   */
+  get _ownerListString() {
+    throw new Error('Not implemented for abstract class `Owner`');
+  }
+
+  /**
+   * Renders the modifier string.
+   *
+   * @return {string} the modifier in parentheses if any, else empty string.
+   */
+  get _modString() {
+    return this.modifier ? ` (${this.modifier})` : '';
+  }
+
+  /**
+   * Renders the owner as a string.
+   *
+   * @return {string} the string representation of the owner.
+   */
+  toString() {
+    return `${this._ownerListString}${this._modString}`;
   }
 }
 
 /**
- * Returns a list of github usernames that can be "approvers" for the set
- * of files. It first tries to find the interection across the files and if
- * there are none it will return the union across usernames.
- * @param {!Array} files
- * @param {object} ownersMap
- * @return {object}
+ * A user who owns a set of files.
  */
-function findOwners(files, ownersMap) {
-  const fileOwners = Object.create(null);
-  files.forEach(file => {
-    const owner = findClosestOwnersFile(file, ownersMap);
-    if (!fileOwners[owner.dirname]) {
-      fileOwners[owner.dirname] = {
-        owner,
-        files: [file],
-      };
-    } else {
-      fileOwners[owner.dirname].files.push(file);
-    }
-  });
-  return fileOwners;
-}
-
-/**
- * Using the `ownersMap` key which is the path to the actual OWNER file
- * in the repo, we simulate a folder traversal by splitting the path and
- * finding the closest OWNER file for a RepoFile.
- *
- * @param {!RepoFile} file
- * @param {object} ownersMap
- * @return {object}
- */
-function findClosestOwnersFile(file, ownersMap) {
-  let dirname = file.dirname;
-  let owner = ownersMap[dirname];
-  const dirs = dirname.split(path.sep);
-
-  while (!owner && dirs.pop() && dirs.length) {
-    dirname = dirs.join(path.sep);
-    owner = ownersMap[dirname];
+class UserOwner extends Owner {
+  /**
+   * Constructor.
+   *
+   * @param {string} username owner's GitHub username.
+   * @param {?OWNER_MODIFIER} modifier optional owner modifier.
+   */
+  constructor(username, modifier = OWNER_MODIFIER.NONE) {
+    super(username, modifier);
+    Object.assign(this, {username});
   }
-  return owner;
+
+  /**
+   * Tests if this owner matches a username.
+   *
+   * @param {string} username username to check.
+   * @return {boolean} true if this owner has the username.
+   */
+  includes(username) {
+    return this.username === username;
+  }
+
+  /**
+   * Returns a list of all usernames included by the owner.
+   *
+   * @return {!Array<string>} list containing the user's GitHub username.
+   */
+  get allUsernames() {
+    return [this.username];
+  }
+
+  /**
+   * Render the owner as a string.
+   *
+   * @return {string} the owner's username.
+   */
+  get _ownerListString() {
+    return this.username;
+  }
 }
 
 /**
- * @param {!Array} owners
- * @return {object}
+ * A team which owns some set of files.
  */
-function createOwnersMap(owners) {
-  return owners.reduce((ownersMap, owner) => {
-    // Handles empty OWNERS.yaml files.
-    if (!owner) {
-      return ownersMap;
-    }
-    if (owner.dirOwners.length) {
-      ownersMap[owner.dirname] = owner;
-    }
-    return ownersMap;
-  }, Object.create(null));
+class TeamOwner extends Owner {
+  /**
+   * Constructor.
+   *
+   * @param {!Team} team the GitHub team.
+   * @param {?OWNER_MODIFIER} modifier optional owner modifier.
+   */
+  constructor(team, modifier = OWNER_MODIFIER.NONE) {
+    super(team.toString(), modifier);
+    Object.assign(this, {team});
+  }
+
+  /**
+   * Tests if this owner matches a username.
+   *
+   * @param {string} username username to check.
+   * @return {boolean} true if this team owner has the username.
+   */
+  includes(username) {
+    return this.team.members.includes(username);
+  }
+
+  /**
+   * Returns a list of all usernames included by the owner.
+   *
+   * @return {!Array<string>} list containing the user's GitHub username.
+   */
+  get allUsernames() {
+    return this.team.members;
+  }
+
+  /**
+   * Render the owner list as a string.
+   *
+   * @return {string} the team members' usernames as a comma-separated list.
+   */
+  get _ownerListString() {
+    return `${this.name} [${this.team.members.join(', ')}]`;
+  }
 }
 
-module.exports = {Owner, findOwners, findClosestOwnersFile, createOwnersMap};
+/**
+ * A wildcard owner that includes anyone.
+ */
+class WildcardOwner extends Owner {
+  /**
+   * Constructor.
+   *
+   * @param {?OWNER_MODIFIER} modifier optional owner modifier.
+   */
+  constructor(modifier = OWNER_MODIFIER.NONE) {
+    if (modifier && modifier != OWNER_MODIFIER.NONE) {
+      throw new Error('Modifiers not supported on wildcard `*` owner');
+    }
+    super('*');
+  }
+
+  /**
+   * Tests if this owner matches a username.
+   *
+   * @param {string} unusedUsername username to check.
+   * @return {boolean} always true
+   */
+  includes(unusedUsername) {
+    return true;
+  }
+
+  /**
+   * Render the wildcard owner as a string.
+   *
+   * @return {string} the `*` wildcard symbol.
+   */
+  get _ownerListString() {
+    return '*';
+  }
+}
+
+module.exports = {Owner, UserOwner, TeamOwner, WildcardOwner, OWNER_MODIFIER};

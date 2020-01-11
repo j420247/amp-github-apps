@@ -18,19 +18,23 @@ import {Octokit} from 'probot';
 import {ChecksListForRefParams, ChecksUpdateParams} from '@octokit/rest';
 import {GitHubAPI} from 'probot/lib/github';
 
-export class PullRequest {
-  private check: string;
-  private github: GitHubAPI;
-  public headSha: string;
-  private owner: string;
-  private repo: string;
+const ACTION: Octokit.ChecksUpdateParamsActions = {
+  label: 'Create a test site',
+  description: 'Serves the minified output of this PR.',
+  identifier: 'deploy-me-action',
+};
 
-  constructor(github: GitHubAPI, headSha: string, owner: string, repo: string) {
-    this.check = 'pr-deploy-check';
+const check_name = process.env.GH_CHECK;
+const owner = process.env.GH_OWNER;
+const repo = process.env.GH_REPO;
+
+export class PullRequest {
+  private github: GitHubAPI;
+  private headSha: string;
+
+  constructor(github: GitHubAPI, headSha: string) {
     this.github = github;
     this.headSha = headSha;
-    this.owner = owner;
-    this.repo = repo;
   }
 
   /**
@@ -42,42 +46,22 @@ export class PullRequest {
   }
 
   /**
-   * Set check to 'completed' to enable the 'Deploy Me' action.
-   */
-  async enableDeploymentCheck() {
-    const check = await this.getCheck_();
-
-    const params: ChecksUpdateParams = {
-      owner: this.owner,
-      repo: this.repo,
-      check_run_id: check.id,
-      status: 'completed',
-      conclusion: 'neutral',
-      output: {
-        title: 'Your PR was compiled!',
-        summary: 'Please click \'Deploy Me!\' to test it on a live demo site',
-      },
-      actions: [{
-        label: 'Deploy me!',
-        description: 'Trigger PR deployment',
-        identifier: 'deploy-me-action',
-      }],
-    };
-
-    return this.github.checks.update(params);
-  }
-
-  /**
    * Set check to 'in_progress' while files are being uploaded.
    */
-  async inProgressDeploymentCheck() {
+  async deploymentInProgress() {
     const check = await this.getCheck_();
 
     const params: ChecksUpdateParams = {
-      owner: this.owner,
-      repo: this.repo,
+      owner,
+      repo,
       check_run_id: check.id,
       status: 'in_progress',
+      output: {
+        title: 'Creating a test site...',
+        summary: 'Please wait while a test site is being created. ' +
+          'When finished, a link will appear here.',
+        text: check.output.text,
+      },
     };
 
     return this.github.checks.update(params);
@@ -87,20 +71,25 @@ export class PullRequest {
    * Set check to 'completed' and remove the 'Deploy Me' action once
    * deployment is finished. Display the serve url in the check's output.
    */
-  async completeDeploymentCheck(serveUrl: string) {
+  async deploymentCompleted(bucketUrl: string, serveUrl: string) {
     const check = await this.getCheck_();
 
     const params: ChecksUpdateParams = {
-      owner: this.owner,
-      repo: this.repo,
+      owner,
+      repo,
       check_run_id: check.id,
       status: 'completed',
       actions: [],
       conclusion: 'success',
       details_url: serveUrl,
       output: {
-        title: 'Your PR was deployed!',
-        summary: `You can find it here: ${serveUrl}`,
+        title: 'Success! A test site was created.',
+        summary:
+          `You can now access the [**website**](${serveUrl}examples/article.amp.html) or browse the deployed [**Google Cloud Platform Bucket**](${bucketUrl}).<br/>` +
+          `To browse examples or manual tests, append your specific example/test to the following URL:<br/>` +
+          `\`${serveUrl}examples/[YOUR_EXAMPLE_HERE]\`<br/>` +
+          `**For example:** You can access the sample [AMP article example](${serveUrl}examples/article.amp.html) at <br/>` +
+          `\`${serveUrl}examples/article.amp.html\``,
       },
     };
 
@@ -108,19 +97,123 @@ export class PullRequest {
   }
 
   /**
+   * Fail the check if any part of the deployment fails.
+   */
+  async deploymentErrored(error: Error) {
+    const check = await this.getCheck_();
+
+    const params: ChecksUpdateParams = {
+      owner,
+      repo,
+      check_run_id: check.id,
+      status: 'completed',
+      conclusion: 'neutral',
+      output: {
+        title: 'Deployment error.',
+        summary: 'There was an error creating a test site.',
+        text: error.message,
+      },
+      actions: [ACTION],
+    };
+
+    return this.github.checks.update(params);
+  }
+
+  /**
+   * Set check to 'completed' to enable the 'Deploy Me' action.
+   */
+  async buildCompleted(id: number) {
+    const check = await this.getCheck_();
+
+    const params: ChecksUpdateParams = {
+      owner,
+      repo,
+      check_run_id: check.id,
+      status: 'completed',
+      conclusion: 'neutral',
+      output: {
+        title: 'Ready to create a test site.',
+        summary: 'Please click the `Create a test site` button above to ' +
+        'deploy the minified build of this PR along with examples from ' +
+        '`examples/` and `test/manual/`. It should only take a minute.',
+        text: `Travis build number: ${id}`,
+      },
+      actions: [ACTION],
+    };
+
+    return this.github.checks.update(params);
+  }
+
+  /**
+   * Set check to 'neutral' if dist fails.
+   */
+  async buildErrored() {
+    const check = await this.getCheck_();
+
+    const params: ChecksUpdateParams = {
+      owner,
+      repo,
+      check_run_id: check.id,
+      status: 'completed',
+      conclusion: 'neutral',
+      output: {
+        title: 'Build error.',
+        summary: 'A test site cannot be created because this PR ' +
+        'failed to build. Please check the Travis logs for more information.',
+      },
+    };
+
+    return this.github.checks.update(params);
+  }
+
+  /**
+   * Set check to 'neutral' if dist is skipped.
+   */
+  async buildSkipped() {
+    const check = await this.getCheck_();
+
+    const params: ChecksUpdateParams = {
+      owner,
+      repo,
+      check_run_id: check.id,
+      status: 'completed',
+      conclusion: 'neutral',
+      output: {
+        title: 'Build skipped.',
+        summary: 'A test site cannot be created because the ' +
+         'compilation step was skipped in Travis. This happens when ' +
+         'a PR only includes non-code changes, such as documentation. ' +
+         'Please check the Travis logs for more information.',
+      },
+    };
+
+    return this.github.checks.update(params);
+  }
+
+  async getTravisBuildNumber() {
+    const check = await this.getCheck_();
+
+    if (!check.output || !check.output.text) {
+      return -1;
+    }
+
+    return Number(check.output.text.replace(/\D/g, ''));
+  }
+
+  /**
    * Create the check and set it to 'queued'.
    */
   private async createCheck_() {
     const params: Octokit.ChecksCreateParams = {
-      owner: this.owner,
-      repo: this.repo,
-      name: this.check,
+      owner,
+      repo,
+      name: check_name,
       head_sha: this.headSha,
       status: 'queued',
       output: {
-        title: 'Your PR is compiling...',
-        summary: 'When Travis is done compiling your PR, ' +
-          'a "Deploy Me!" button will appear here.',
+        title: 'Waiting for the build to finish...',
+        summary: 'When Travis is finished compiling this PR, ' +
+          'a "Create a test site!" button will appear here.',
       },
     };
 
@@ -132,11 +225,22 @@ export class PullRequest {
    */
   private async resetCheck_(
     check: Octokit.ChecksListForRefResponseCheckRunsItem) {
+    let output: Octokit.ChecksListForRefResponseCheckRunsItemOutput;
+    if (check.status == 'completed'
+      && check.conclusion == 'success' && check.output.text) {
+      output = {
+        title: 'A new build is being compiled...',
+        summary: `To view the existing test site, visit ${check.output.text} ` +
+        'This site will be overwritten if you recreate the test site.',
+      } as Octokit.ChecksListForRefResponseCheckRunsItemOutput;
+    }
+
     const params: ChecksUpdateParams = {
-      owner: this.owner,
-      repo: this.repo,
+      owner,
+      repo,
       check_run_id: check.id,
       status: 'queued',
+      output,
     };
     return this.github.checks.update(params);
   }
@@ -146,10 +250,10 @@ export class PullRequest {
    */
   private async getCheck_() {
     const params: ChecksListForRefParams = {
-      owner: this.owner,
-      repo: this.repo,
+      owner,
+      repo,
       ref: this.headSha,
-      check_name: this.check,
+      check_name,
     };
 
     const checks = await this.github.checks.listForRef(params);
@@ -164,4 +268,3 @@ export class PullRequest {
 module.exports = {
   PullRequest,
 };
-

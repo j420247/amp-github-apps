@@ -19,6 +19,8 @@ import express, {IRouter} from 'express';
 import {PullRequest} from './github';
 import {unzipAndMove} from './zipper';
 
+const BASE_URL = `https://storage.googleapis.com/${process.env.SERVE_BUCKET}/`;
+
 /**
  * Creates or resets the GitHub PR Deploy check
  * when a pull request is opened or synchronized.
@@ -32,8 +34,6 @@ function initializeCheck(app: Application) {
     const pr = new PullRequest(
       context.github,
       context.payload.pull_request.head.sha,
-      context.repo().owner,
-      context.repo().repo
     );
     return pr.createOrResetCheck();
   });
@@ -45,39 +45,55 @@ function initializeCheck(app: Application) {
  * so that the check run action to deploy site is enabled.
  */
 function initializeRouter(app: Application) {
-  const router: IRouter<void> = app.route('/v0/pr-deploy');
+  const router: IRouter = app.route('/v0/pr-deploy');
   router.use(express.json());
-  router.post('/owners/:owner/repos/:repo/headshas/:headSha',
+  router.post('/travisbuilds/:travisBuild/headshas/:headSha/:result',
     async(request, response) => {
+      const {travisBuild, headSha, result} = request.params;
       const github = await app.auth(Number(process.env.INSTALLATION_ID));
-      const {headSha, owner, repo} = request.params;
-      const pr = new PullRequest(github, headSha, owner, repo);
-      await pr.enableDeploymentCheck();
+      const pr = new PullRequest(github, headSha);
+      switch (result) {
+        case 'success':
+          await pr.buildCompleted(Number(travisBuild));
+          break;
+        case 'errored':
+          await pr.buildErrored();
+          break;
+        case 'skipped':
+        default:
+          await pr.buildSkipped();
+          break;
+      }
       response.send({status: 200});
     });
 }
 
 /**
- * Deploys the PR branch to gs://amp-test-website-1/<pull_request_id>
+ * Creates a listener that deploys the PR branch to gs://amp-test-website-1/<pull_request_id>
+ * when the 'Deploy me!' button is clicked.
  */
 function initializeDeployment(app: Application) {
   app.on('check_run.requested_action', async context => {
+    if (context.payload.check_run.name != process.env.GH_CHECK) {
+      return;
+    }
+
     const pr = new PullRequest(
       context.github,
       context.payload.check_run.head_sha,
-      context.repo().owner,
-      context.repo().repo,
     );
-
-    pr.inProgressDeploymentCheck();
-
-    const pullRequest = context.payload.check_run.pull_requests
-      .find(pull_request => {
-        return pull_request.head.sha === pr.headSha;
+    await pr.deploymentInProgress();
+    const travisBuild = await pr.getTravisBuildNumber();
+    await unzipAndMove(travisBuild)
+      .then(bucketUrl => {
+        pr.deploymentCompleted(
+          bucketUrl,
+          `${BASE_URL}amp_dist_${travisBuild}/`
+        );
+      })
+      .catch(e => {
+        pr.deploymentErrored(e);
       });
-    const serveUrl = await unzipAndMove(pullRequest.number);
-
-    pr.completeDeploymentCheck(serveUrl);
   });
 }
 

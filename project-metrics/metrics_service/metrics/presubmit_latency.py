@@ -11,17 +11,20 @@ from metrics import base
 class PresubmitLatencyMetric(base.Metric):
   """A metric tracking the average duration of Travis PR builds."""
 
+  UNIT = 'seconds'
+
   def _format_value(self, avg_seconds: float) -> Text:
     return '%dm' % (avg_seconds // 60)
 
   def _score_value(self, avg_seconds: float) -> models.MetricScore:
-    if avg_seconds > 35:
+    avg_minutes = avg_seconds / 60
+    if avg_minutes > 35:
       return models.MetricScore.CRITICAL
-    elif avg_seconds > 25:
+    elif avg_minutes > 25:
       return models.MetricScore.POOR
-    elif avg_seconds > 15:
+    elif avg_minutes > 15:
       return models.MetricScore.MODERATE
-    elif avg_seconds > 10:
+    elif avg_minutes > 10:
       return models.MetricScore.GOOD
     else:
       return models.MetricScore.EXCELLENT
@@ -40,7 +43,10 @@ class PresubmitLatencyMetric(base.Metric):
     """
     session = db.Session()
     avg_seconds = session.query(sqlalchemy.func.avg(
-        models.Build.duration)).filter(models.Build.is_last_90_days()).scalar()
+        models.Build.duration)).filter(
+            models.Build.is_last_90_days(base_time=self.base_time)).scalar()
+    session.close()
+
     if avg_seconds:
       return float(avg_seconds)
     raise ValueError('No Travis builds to process.')
